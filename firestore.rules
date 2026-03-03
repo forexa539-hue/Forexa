@@ -1,0 +1,32 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. User Profiles: specific users can read/write their own data
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+      
+      // Allow access to subcollections (positions, trades)
+      match /positions/{positionId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+      match /trades/{tradeId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+    }
+
+    // 2. Leaderboard: Public read, but only authenticated users can write their own entry implies server-side or triggered updates
+    // For MVP simplicity allow users to write their own entry, or keep it open if logic is client-side.
+    // Our code writes to leaderboard from client-side (trading-store.ts).
+    // So we need to allow write access to specific document if auth.uid matches.
+    match /leaderboard/{userId} {
+      allow read: if true; // Public leaderboard
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // 3. Inquiries: Public write access for contact form
+    match /inquiries/{inquiryId} {
+      allow create: if true;
+    }
+  }
+}
