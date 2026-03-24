@@ -33,11 +33,11 @@ export async function fetchMarketNews(category?: string): Promise<NewsArticle[]>
         /* eslint-disable @typescript-eslint/no-explicit-any */
         return data.articles.map((a: any) => ({
             title: a.title,
-            description: a.description,
+            description: a.description || 'No description available.',
             url: a.url,
             source: a.source?.name || 'Unknown',
             publishedAt: a.publishedAt,
-            imageUrl: a.image,
+            imageUrl: a.image || a.urlToImage,
             category: category || 'general',
         }));
         /* eslint-enable @typescript-eslint/no-explicit-any */

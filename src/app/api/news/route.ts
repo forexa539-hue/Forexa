@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 
-const NEWS_API_KEY = process.env.NEXT_PUBLIC_NEWS_API_KEY || '';
+const NEWS_API_KEY = process.env.NEWS_API_KEY || process.env.NEXT_PUBLIC_NEWS_API_KEY || '';
 
 export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
@@ -15,14 +15,14 @@ export async function GET(request: Request) {
         : 'stock market OR crypto OR forex';
 
     try {
-        const url = `https://gnews.io/api/v4/search?q=${encodeURIComponent(query)}&lang=en&max=9&apikey=${NEWS_API_KEY}`;
+        const url = `https://newsapi.org/v2/everything?q=${encodeURIComponent(query)}&language=en&pageSize=9&sortBy=publishedAt&apiKey=${NEWS_API_KEY}`;
 
         const res = await fetch(url, { next: { revalidate: 3600 } });
 
         if (!res.ok) {
             return NextResponse.json(
-                { error: `GNews API error: ${res.status} ${res.statusText}` },
-                { status: res.status }
+                { error: `News API upstream error: ${res.status} ${res.statusText}` },
+                { status: 502 }
             );
         }
 

@@ -46,6 +46,14 @@ async function createUserDocument(user: User) {
     }
 }
 
+async function ensureUserDocument(user: User) {
+    try {
+        await createUserDocument(user);
+    } catch (error) {
+        console.warn('User document sync failed (auth will continue):', error);
+    }
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
     const [user, setUser] = useState<User | null>(null);
     const [loading, setLoading] = useState(true);
@@ -56,14 +64,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             return;
         }
         const auth = getAuthInstance();
-        const unsubscribe = onAuthStateChanged(auth, async (user) => {
+        return onAuthStateChanged(auth, async (user) => {
             setUser(user);
             if (user) {
-                await createUserDocument(user);
+                await ensureUserDocument(user);
             }
             setLoading(false);
         });
-        return unsubscribe;
     }, []);
 
     const signIn = async (email: string, password: string) => {
@@ -75,13 +82,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const auth = getAuthInstance();
         const cred = await createUserWithEmailAndPassword(auth, email, password);
         await updateProfile(cred.user, { displayName });
-        await createUserDocument(cred.user);
+        await ensureUserDocument(cred.user);
     };
 
     const signInWithGoogle = async () => {
         const auth = getAuthInstance();
         const provider = new GoogleAuthProvider();
-        await signInWithPopup(auth, provider);
+        const cred = await signInWithPopup(auth, provider);
+        await ensureUserDocument(cred.user);
     };
 
     const signOut = async () => {

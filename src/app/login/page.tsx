@@ -36,6 +36,10 @@ export default function LoginPage() {
                 setError('Email is already registered');
             } else if (firebaseErr.code === 'auth/weak-password') {
                 setError('Password must be at least 6 characters');
+            } else if (firebaseErr.code === 'auth/operation-not-allowed') {
+                setError('Email/password auth is disabled in Firebase console');
+            } else if (firebaseErr.code === 'auth/invalid-api-key') {
+                setError('Invalid Firebase API key in .env');
             } else {
                 setError(firebaseErr.message || 'Authentication failed');
             }
