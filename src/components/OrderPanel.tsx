@@ -1,13 +1,14 @@
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link';
 import { useAuth } from '@/context/auth-context';
 import { useTradingStore } from '@/store/trading-store';
 import styles from './OrderPanel.module.css';
 
 export default function OrderPanel() {
     const { user } = useAuth();
-    const { selectedInstrument, prices, balance, executeMarketOrder, executeLimitOrder } = useTradingStore();
+    const { selectedInstrument, prices, balance, executeMarketOrder, executeLimitOrder, refreshPrice } = useTradingStore();
     const [orderType, setOrderType] = useState<'market' | 'limit'>('market');
     const [side, setSide] = useState<'buy' | 'sell'>('buy');
     const [margin, setMargin] = useState('');
@@ -19,6 +20,11 @@ export default function OrderPanel() {
     const currentPrice = prices[selectedInstrument.id]?.price;
     const marginNum = parseFloat(margin) || 0;
     const positionSize = marginNum * leverage;
+    const limitPriceNum = parseFloat(limitPrice) || 0;
+
+    const estimatedEntryPrice = orderType === 'limit' && limitPriceNum > 0
+        ? limitPriceNum
+        : currentPrice;
 
     // Estimate liquidation price
     // Long: Entry - (Margin * 0.8 / Qty)
@@ -27,22 +33,34 @@ export default function OrderPanel() {
     // => Liq (Long) = Entry - (Margin * 0.8 * Entry / PositionSize)
     // => Liq (Long) = Entry * (1 - 0.8 / Leverage)
     let estimatedLiqPrice = 0;
-    if (currentPrice) {
+    if (estimatedEntryPrice) {
         if (side === 'buy') {
-            estimatedLiqPrice = currentPrice * (1 - 0.8 / leverage);
+            estimatedLiqPrice = estimatedEntryPrice * (1 - 0.8 / leverage);
         } else {
-            estimatedLiqPrice = currentPrice * (1 + 0.8 / leverage);
+            estimatedLiqPrice = estimatedEntryPrice * (1 + 0.8 / leverage);
         }
     }
     if (estimatedLiqPrice < 0) estimatedLiqPrice = 0;
 
     const handleSubmit = async () => {
         if (!user) {
-            setMessage('Please login to trade');
+            setMessage('Please sign in to place orders.');
             return;
+        }
+        if (!currentPrice || currentPrice <= 0) {
+            await refreshPrice(selectedInstrument);
+            const updatedPrice = useTradingStore.getState().prices[selectedInstrument.id]?.price;
+            if (!updatedPrice || updatedPrice <= 0) {
+                setMessage('Live price unavailable. Check API key/network and retry.');
+                return;
+            }
         }
         if (!marginNum || marginNum <= 0) {
             setMessage('Enter a valid margin amount');
+            return;
+        }
+        if (!Number.isFinite(leverage) || leverage <= 0) {
+            setMessage('Select a valid leverage');
             return;
         }
         if (marginNum > balance) {
@@ -69,13 +87,15 @@ export default function OrderPanel() {
             }
             setMargin('');
             setLimitPrice('');
-        } catch {
-            setMessage('Order failed. Try again.');
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Order failed. Try again.';
+            setMessage(message);
         }
         setSubmitting(false);
     };
 
     const leverageOptions = [1, 2, 5, 10, 20, 50, 100];
+    const isDisabled = submitting || !user || !currentPrice || currentPrice <= 0;
 
     return (
         <div className={styles.panel}>
@@ -188,11 +208,19 @@ export default function OrderPanel() {
             <button
                 className={`btn ${side === 'buy' ? 'btn-primary' : 'btn-danger'} ${styles.submitBtn}`}
                 onClick={handleSubmit}
-                disabled={submitting}
+                disabled={isDisabled}
             >
                 {submitting ? 'Processing...' : `${side === 'buy' ? 'Buy' : 'Sell'} ${selectedInstrument.symbol}`}
             </button>
 
+            {!user && (
+                <p className={styles.message}>
+                    You must <Link href="/login">sign in</Link> before trading.
+                </p>
+            )}
+            {user && (!currentPrice || currentPrice <= 0) && (
+                <p className={styles.message}>Waiting for live price feed…</p>
+            )}
             {message && <p className={styles.message}>{message}</p>}
         </div>
     );

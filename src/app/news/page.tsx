@@ -15,21 +15,43 @@ export default function NewsPage() {
     const [articles, setArticles] = useState<NewsArticle[]>([]);
     const [category, setCategory] = useState('');
     const [loading, setLoading] = useState(true);
+    const [errorMessage, setErrorMessage] = useState('');
 
     useEffect(() => {
         let active = true;
-        setLoading(true);
-        fetchMarketNews(category || undefined).then((data) => {
-            if (active) {
-                setArticles(data);
-                setLoading(false);
-            }
-        });
-        return () => { active = false; };
+        fetchMarketNews(category || undefined)
+            .then((data) => {
+                if (active) {
+                    setArticles(data);
+                    setErrorMessage('');
+                    setLoading(false);
+                }
+            })
+            .catch((error) => {
+                console.error('Failed to load news:', error);
+                if (active) {
+                    setArticles([]);
+                    setErrorMessage('Could not load news right now. Please try again.');
+                    setLoading(false);
+                }
+            });
+        return () => {
+            active = false;
+        };
     }, [category]);
+
+    const handleCategoryChange = (key: string) => {
+        if (key === category) return;
+        setLoading(true);
+        setErrorMessage('');
+        setCategory(key);
+    };
 
     const formatDate = (dateStr: string) => {
         const date = new Date(dateStr);
+        if (Number.isNaN(date.getTime())) {
+            return 'Unknown date';
+        }
         return date.toLocaleDateString('en-US', {
             month: 'short',
             day: 'numeric',
@@ -51,13 +73,15 @@ export default function NewsPage() {
                         <button
                             key={cat.key}
                             className={`tab ${category === cat.key ? 'active' : ''}`}
-                            onClick={() => setCategory(cat.key)}
+                            onClick={() => handleCategoryChange(cat.key)}
                         >
                             {cat.label}
                         </button>
                     ))}
                 </div>
             </div>
+
+            {errorMessage && <div className={styles.loading}>{errorMessage}</div>}
 
             {loading ? (
                 <div className={styles.loading}>Loading news...</div>

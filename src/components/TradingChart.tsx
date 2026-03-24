@@ -8,7 +8,7 @@ import {
     AreaSeries,
     HistogramSeries,
 } from 'lightweight-charts';
-import type { IChartApi, ISeriesApi, CandlestickData, LineData, HistogramData, Time } from 'lightweight-charts';
+import type { IChartApi, ISeriesApi, CandlestickData, LineData, Time } from 'lightweight-charts';
 import { Instrument, fetchOHLCV, OHLCVData } from '@/lib/market-api';
 import styles from './TradingChart.module.css';
 
@@ -106,13 +106,11 @@ function calculateRSI(data: OHLCVData[], period: number = 14): LineData[] {
 export default function TradingChart({ instrument, currentPrice }: TradingChartProps) {
     const chartContainerRef = useRef<HTMLDivElement>(null);
     const chartRef = useRef<IChartApi | null>(null);
-    /* eslint-disable @typescript-eslint/no-explicit-any */
-    const mainSeriesRef = useRef<ISeriesApi<any> | null>(null);
-    const volumeSeriesRef = useRef<ISeriesApi<any> | null>(null);
+    const mainSeriesRef = useRef<ISeriesApi<'Candlestick' | 'Line' | 'Area'> | null>(null);
+    const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null);
     // Refs for indicator series to update them with live data if needed (skipping live update for simplicity for now)
     const indicatorsRef = useRef<Map<string, ISeriesApi<'Line'>>>(new Map());
     const lastCandleRef = useRef<CandlestickData | null>(null);
-    /* eslint-enable @typescript-eslint/no-explicit-any */
 
     const [chartType, setChartType] = useState<ChartType>('candlestick');
     const [timeframe, setTimeframe] = useState<Timeframe>('1h');
@@ -175,9 +173,9 @@ export default function TradingChart({ instrument, currentPrice }: TradingChartP
         let data: OHLCVData[] = [];
         try {
             data = await fetchOHLCV(instrument, timeframe);
-        } catch (err: any) {
+        } catch (err: unknown) {
             console.error('Failed to fetch chart data:', err);
-            setError(err.message || 'Failed to load chart data');
+            setError(err instanceof Error ? err.message : 'Failed to load chart data');
             setLoading(false);
             return;
         }
@@ -201,7 +199,7 @@ export default function TradingChart({ instrument, currentPrice }: TradingChartP
 
         // --- Main Series ---
         // Basic configuration
-        let mainSeries: ISeriesApi<any>;
+        let mainSeries: ISeriesApi<'Candlestick' | 'Line' | 'Area'>;
 
         if (chartType === 'candlestick') {
             mainSeries = chart.addSeries(CandlestickSeries, {
@@ -326,7 +324,10 @@ export default function TradingChart({ instrument, currentPrice }: TradingChartP
     }, [instrument, chartType, timeframe, activeIndicators]);
 
     useEffect(() => {
-        buildChart();
+        const indicators = indicatorsRef.current;
+        const buildTimer = window.setTimeout(() => {
+            void buildChart();
+        }, 0);
 
         const handleResize = () => {
             if (chartContainerRef.current && chartRef.current) {
@@ -337,13 +338,14 @@ export default function TradingChart({ instrument, currentPrice }: TradingChartP
         window.addEventListener('resize', handleResize);
 
         return () => {
+            window.clearTimeout(buildTimer);
             window.removeEventListener('resize', handleResize);
             if (chartRef.current) {
                 chartRef.current.remove();
                 chartRef.current = null;
                 mainSeriesRef.current = null;
                 volumeSeriesRef.current = null;
-                indicatorsRef.current.clear();
+                indicators.clear();
             }
         };
     }, [buildChart]);
@@ -384,7 +386,7 @@ export default function TradingChart({ instrument, currentPrice }: TradingChartP
         const now = getSnappedTime(timeframe) as Time;
 
         if (chartType === 'candlestick') {
-            let candle = lastCandleRef.current;
+            const candle = lastCandleRef.current;
 
             if (candle && (candle.time as number) === (now as number)) {
                 // Update existing candle

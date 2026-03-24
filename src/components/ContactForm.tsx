@@ -15,6 +15,19 @@ export default function ContactForm() {
     const [status, setStatus] = useState<'idle' | 'submitting' | 'success' | 'error'>('idle');
     const [errorMessage, setErrorMessage] = useState('');
 
+    const validate = () => {
+        const name = formData.name.trim();
+        const email = formData.email.trim();
+        const subject = formData.subject.trim();
+        const message = formData.message.trim();
+
+        if (name.length < 2 || name.length > 80) return 'Name must be 2-80 characters';
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return 'Enter a valid email address';
+        if (subject.length < 3 || subject.length > 120) return 'Subject must be 3-120 characters';
+        if (message.length < 10 || message.length > 2000) return 'Message must be 10-2000 characters';
+        return '';
+    };
+
     const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
         const { name, value } = e.target;
         setFormData(prev => ({ ...prev, [name]: value }));
@@ -22,12 +35,22 @@ export default function ContactForm() {
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
+        const validationError = validate();
+        if (validationError) {
+            setStatus('error');
+            setErrorMessage(validationError);
+            return;
+        }
+
         setStatus('submitting');
         setErrorMessage('');
 
         try {
             await addDoc(collection(getDbInstance(), 'inquiries'), {
-                ...formData,
+                name: formData.name.trim(),
+                email: formData.email.trim(),
+                subject: formData.subject.trim(),
+                message: formData.message.trim(),
                 submittedAt: serverTimestamp(),
                 status: 'new'
             });
@@ -44,7 +67,7 @@ export default function ContactForm() {
         <div className={styles.formContainer}>
             {status === 'success' && (
                 <div className={`${styles.message} ${styles.success}`}>
-                    Thank you! Your message has been received. We'll be in touch shortly.
+                    Thank you! Your message has been received. We&apos;ll be in touch shortly.
                 </div>
             )}
             {status === 'error' && (

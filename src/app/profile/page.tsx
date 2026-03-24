@@ -19,40 +19,58 @@ export default function ProfilePage() {
     } | null>(null);
     const [showResetModal, setShowResetModal] = useState(false);
     const [resetting, setResetting] = useState(false);
-    const [dataLoading, setDataLoading] = useState(true);
+    const [dataLoading, setDataLoading] = useState(false);
+    const [errorMessage, setErrorMessage] = useState('');
 
     useEffect(() => {
-        if (!user) {
-            setDataLoading(false);
-            return;
-        }
+        if (!user) return;
 
         const load = async () => {
-            await loadUserData(user.uid);
-            const userDoc = await getDoc(doc(getDbInstance(), 'users', user.uid));
-            const data = userDoc.data();
-            if (data) {
-                setUserData({
-                    resetCount: data.resetCount || 0,
-                    createdAt: data.createdAt?.toDate?.()?.toLocaleDateString() || 'Unknown',
-                });
+            setDataLoading(true);
+            setErrorMessage('');
+            try {
+                await loadUserData(user.uid);
+                const userDoc = await getDoc(doc(getDbInstance(), 'users', user.uid));
+                const data = userDoc.data();
+                if (data) {
+                    setUserData({
+                        resetCount: data.resetCount || 0,
+                        createdAt: data.createdAt?.toDate?.()?.toLocaleDateString() || 'Unknown',
+                    });
+                }
+            } catch (error) {
+                console.error('Profile data load failed:', error);
+                setErrorMessage('Could not load profile data. Please refresh.');
+            } finally {
+                setDataLoading(false);
             }
-            setDataLoading(false);
         };
-        load();
+        void load();
     }, [user, loadUserData]);
 
     const handleReset = async () => {
         if (!user) return;
         setResetting(true);
-        await resetAccount(user.uid);
-        setResetting(false);
-        setShowResetModal(false);
+        setErrorMessage('');
+        try {
+            await resetAccount(user.uid);
+            setShowResetModal(false);
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Failed to reset account';
+            setErrorMessage(message);
+        } finally {
+            setResetting(false);
+        }
     };
 
     const handleSignOut = async () => {
-        await signOut();
-        router.push('/');
+        try {
+            await signOut();
+            router.push('/');
+        } catch (error) {
+            console.error('Sign out failed:', error);
+            setErrorMessage('Failed to logout. Please try again.');
+        }
     };
 
     if (authLoading || dataLoading) {
@@ -81,6 +99,10 @@ export default function ProfilePage() {
                 <p>{user.displayName || user.email}</p>
             </div>
 
+            {errorMessage && (
+                <p style={{ marginBottom: '16px', color: 'var(--danger)' }}>{errorMessage}</p>
+            )}
+
             <div className={styles.overview}>
                 <div className={styles.statCard}>
                     <label>Balance</label>
@@ -99,6 +121,12 @@ export default function ProfilePage() {
                 <div className={styles.statCard}>
                     <label>Open Positions</label>
                     <p>{positions.filter((p) => p.status === 'open').length}</p>
+                </div>
+                <div className={styles.statCard}>
+                    <label>Total PnL</label>
+                    <p className={totalPnL >= 0 ? 'profit' : 'loss'}>
+                        {totalPnL >= 0 ? '+' : ''}${totalPnL.toFixed(2)}
+                    </p>
                 </div>
             </div>
 

@@ -66,7 +66,20 @@ export async function fetchPrice(instrument: Instrument): Promise<PriceData> {
             `/api/market/price?source=${instrument.apiSource}&symbol=${instrument.apiSymbol}`
         );
         if (!res.ok) throw new Error('API Error');
-        return await res.json();
+        const payload = await res.json();
+
+        // API route returns a symbol-keyed object, even for single-symbol requests.
+        const symbolData = payload?.[instrument.apiSymbol];
+        if (symbolData && typeof symbolData === 'object') {
+            return symbolData as PriceData;
+        }
+
+        // Backward-compat fallback if route ever returns direct PriceData.
+        if (payload && typeof payload === 'object' && 'price' in payload) {
+            return payload as PriceData;
+        }
+
+        throw new Error('Invalid price payload');
     } catch (err) {
         console.warn(`Fetch price failed for ${instrument.symbol}`, err);
         return {
@@ -108,6 +121,19 @@ export async function fetchBatchPrices(instruments: Instrument[]): Promise<Recor
         fetchGroup('coingecko', coingeckoInsts),
         fetchGroup('twelvedata', twelveDataInsts)
     ]);
+
+    // Fallback for missing symbols in batch response.
+    const missing = instruments.filter((inst) => !results[inst.id]);
+    if (missing.length > 0) {
+        await Promise.all(
+            missing.map(async (inst) => {
+                const single = await fetchPrice(inst);
+                if (single.price > 0) {
+                    results[inst.id] = single;
+                }
+            })
+        );
+    }
 
     return results;
 }

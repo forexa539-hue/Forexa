@@ -42,22 +42,23 @@ function TradingViewWidget({ instrument }: TradingViewWidgetProps) {
     const containerRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
-        if (!containerRef.current) return;
+        const container = containerRef.current;
+        if (!container) return;
 
         // Clear previous widget
-        containerRef.current.innerHTML = '';
+        container.innerHTML = '';
 
         const script = document.createElement('script');
         script.src = 'https://s3.tradingview.com/tv.js';
         script.async = true;
         script.onload = () => {
-            if (!containerRef.current) return;
+            if (!container) return;
 
             // Create inner container
             const chartDiv = document.createElement('div');
             chartDiv.id = `tradingview_${instrument.id}_${Date.now()}`;
             chartDiv.style.height = '100%';
-            containerRef.current.appendChild(chartDiv);
+            container.appendChild(chartDiv);
 
             // @ts-expect-error TradingView widget loaded via script tag
             new window.TradingView.widget({
@@ -80,12 +81,10 @@ function TradingViewWidget({ instrument }: TradingViewWidgetProps) {
             });
         };
 
-        containerRef.current.appendChild(script);
+        container.appendChild(script);
 
         return () => {
-            if (containerRef.current) {
-                containerRef.current.innerHTML = '';
-            }
+            container.innerHTML = '';
         };
     }, [instrument]);
 

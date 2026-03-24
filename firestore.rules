@@ -2,6 +2,15 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
+    function isNonEmptyString(v, min, max) {
+      return v is string && v.size() >= min && v.size() <= max;
+    }
+
+    function isValidEmail(v) {
+      return v is string && v.size() <= 254 &&
+        v.matches('^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$');
+    }
+
     // 1. User Profiles: specific users can read/write their own data
     match /users/{userId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
@@ -21,12 +30,21 @@ service cloud.firestore {
     // So we need to allow write access to specific document if auth.uid matches.
     match /leaderboard/{userId} {
       allow read: if true; // Public leaderboard
-      allow write: if request.auth != null && request.auth.uid == userId;
+      allow write: if request.auth != null && request.auth.uid == userId
+        && request.resource.data.keys().hasOnly(['displayName', 'portfolioValue', 'percentReturn', 'lastUpdated'])
+        && isNonEmptyString(request.resource.data.displayName, 2, 80)
+        && request.resource.data.portfolioValue is number
+        && request.resource.data.percentReturn is number;
     }
 
     // 3. Inquiries: Public write access for contact form
     match /inquiries/{inquiryId} {
-      allow create: if true;
+      allow create: if request.resource.data.keys().hasOnly(['name', 'email', 'subject', 'message', 'submittedAt', 'status'])
+        && isNonEmptyString(request.resource.data.name, 2, 80)
+        && isValidEmail(request.resource.data.email)
+        && isNonEmptyString(request.resource.data.subject, 3, 120)
+        && isNonEmptyString(request.resource.data.message, 10, 2000)
+        && request.resource.data.status == 'new';
     }
   }
 }

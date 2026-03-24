@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState } from 'react';
 import { useAuth } from '@/context/auth-context';
 import { useTradingStore } from '@/store/trading-store';
 import { INSTRUMENTS, Instrument } from '@/lib/market-api';
@@ -17,16 +17,17 @@ export default function TradePage() {
         setSelectedInstrument,
         prices,
         balance,
-        refreshPrice,
         refreshPrices,
         loadUserData,
         resetAccount,
         checkLimitOrders,
+        checkLiquidations,
     } = useTradingStore();
 
     const [showResetModal, setShowResetModal] = useState(false);
     const [resetting, setResetting] = useState(false);
     const [chartSource, setChartSource] = useState<'tradingview' | 'custom'>('tradingview');
+    const [pageMessage, setPageMessage] = useState('');
 
     // Load user data on mount
     useEffect(() => {
@@ -38,43 +39,50 @@ export default function TradePage() {
     // Optimized Polling: Only fetch Selected Instrument + Instruments with Open Positions
     useEffect(() => {
         const pollSmart = async () => {
-            const instrumentsToFetch = new Map<string, Instrument>();
+            try {
+                const instrumentsToFetch = new Map<string, Instrument>();
 
-            // 1. Always fetch selected instrument
-            instrumentsToFetch.set(selectedInstrument.id, selectedInstrument);
+                // 1. Always fetch selected instrument
+                instrumentsToFetch.set(selectedInstrument.id, selectedInstrument);
 
-            // 2. Fetch instruments for open/pending positions (for PnL/Limit checks)
-            // accessing state directly from store to ensure freshness inside interval if needed, 
-            // but here we depend on 'positions' from the hook which updates on change.
-            const { positions } = useTradingStore.getState();
+                // 2. Fetch instruments for open/pending positions (for PnL/Limit checks)
+                // accessing state directly from store to ensure freshness inside interval if needed,
+                // but here we depend on 'positions' from the hook which updates on change.
+                const { positions } = useTradingStore.getState();
 
-            positions.forEach(p => {
-                if (p.status === 'open' || p.status === 'pending') {
-                    // Find the instrument object
-                    // We need a helper or just iterate INSTRUMENTS
-                    const inst = INSTRUMENTS.find(i => i.id === p.instrument);
-                    if (inst) {
-                        instrumentsToFetch.set(inst.id, inst);
+                positions.forEach(p => {
+                    if (p.status === 'open' || p.status === 'pending') {
+                        // Find the instrument object
+                        // We need a helper or just iterate INSTRUMENTS
+                        const inst = INSTRUMENTS.find(i => i.id === p.instrument);
+                        if (inst) {
+                            instrumentsToFetch.set(inst.id, inst);
+                        }
                     }
+                });
+
+                // Convert to array
+                const targets = Array.from(instrumentsToFetch.values());
+
+                if (targets.length > 0) {
+                    await refreshPrices(targets);
                 }
-            });
 
-            // Convert to array
-            const targets = Array.from(instrumentsToFetch.values());
-
-            if (targets.length > 0) {
-                await refreshPrices(targets);
-            }
-
-            if (user) {
-                await checkLimitOrders(user.uid);
+                if (user) {
+                    await checkLimitOrders(user.uid);
+                    await checkLiquidations(user.uid);
+                }
+                setPageMessage('');
+            } catch (error) {
+                console.error('Trade page polling failed:', error);
+                setPageMessage('Live updates are temporarily unavailable. Retrying...');
             }
         };
 
         pollSmart();
         const interval = setInterval(pollSmart, 15000); // 15s interval
         return () => clearInterval(interval);
-    }, [selectedInstrument, refreshPrices, checkLimitOrders, user]);
+    }, [selectedInstrument, refreshPrices, checkLimitOrders, checkLiquidations, user]);
 
     const handleInstrumentChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
         const inst = INSTRUMENTS.find((i) => i.id === e.target.value);
@@ -84,9 +92,16 @@ export default function TradePage() {
     const handleReset = async () => {
         if (!user) return;
         setResetting(true);
-        await resetAccount(user.uid);
-        setResetting(false);
-        setShowResetModal(false);
+        try {
+            await resetAccount(user.uid);
+            setShowResetModal(false);
+            setPageMessage('');
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Failed to reset account';
+            setPageMessage(message);
+        } finally {
+            setResetting(false);
+        }
     };
 
     const currentPrice = prices[selectedInstrument.id]?.price;
@@ -173,6 +188,7 @@ export default function TradePage() {
 
             {/* Positions */}
             <div className={styles.positionsSection}>
+                {pageMessage && <p style={{ marginBottom: '12px', color: 'var(--danger)' }}>{pageMessage}</p>}
                 <PositionsTable />
             </div>
 

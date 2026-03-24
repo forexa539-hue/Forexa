@@ -56,11 +56,10 @@ async function ensureUserDocument(user: User) {
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
     const [user, setUser] = useState<User | null>(null);
-    const [loading, setLoading] = useState(true);
+    const [loading, setLoading] = useState(isConfigured());
 
     useEffect(() => {
         if (!isConfigured()) {
-            setLoading(false);
             return;
         }
         const auth = getAuthInstance();
@@ -74,11 +73,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }, []);
 
     const signIn = async (email: string, password: string) => {
+        if (!isConfigured()) throw new Error('Authentication is not configured');
         const auth = getAuthInstance();
         await signInWithEmailAndPassword(auth, email, password);
     };
 
     const signUp = async (email: string, password: string, displayName: string) => {
+        if (!isConfigured()) throw new Error('Authentication is not configured');
         const auth = getAuthInstance();
         const cred = await createUserWithEmailAndPassword(auth, email, password);
         await updateProfile(cred.user, { displayName });
@@ -86,6 +87,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
 
     const signInWithGoogle = async () => {
+        if (!isConfigured()) throw new Error('Authentication is not configured');
         const auth = getAuthInstance();
         const provider = new GoogleAuthProvider();
         const cred = await signInWithPopup(auth, provider);

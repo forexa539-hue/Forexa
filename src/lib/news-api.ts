@@ -8,10 +8,48 @@ export interface NewsArticle {
     category: string;
 }
 
+interface NewsApiResponseArticle {
+    title?: string;
+    description?: string;
+    url?: string;
+    source?: {
+        name?: string;
+    };
+    publishedAt?: string;
+    image?: string;
+    urlToImage?: string;
+}
+
+interface NewsApiResponse {
+    articles?: NewsApiResponseArticle[];
+}
+
+const ALLOWED_CATEGORIES = new Set(['forex', 'crypto', 'indices']);
+
+function sanitizeCategory(category?: string) {
+    const normalized = (category || '').trim().toLowerCase();
+    return ALLOWED_CATEGORIES.has(normalized) ? normalized : undefined;
+}
+
+function toSafeArticle(a: NewsApiResponseArticle, category: string): NewsArticle | null {
+    if (!a.title || !a.url) return null;
+    const safeUrl = a.url.startsWith('http://') || a.url.startsWith('https://') ? a.url : '#';
+    return {
+        title: a.title,
+        description: a.description || 'No description available.',
+        url: safeUrl,
+        source: a.source?.name || 'Unknown',
+        publishedAt: a.publishedAt || new Date().toISOString(),
+        imageUrl: a.image || a.urlToImage,
+        category,
+    };
+}
+
 export async function fetchMarketNews(category?: string): Promise<NewsArticle[]> {
     try {
+        const validCategory = sanitizeCategory(category);
         const params = new URLSearchParams();
-        if (category) params.append('category', category);
+        if (validCategory) params.append('category', validCategory);
 
         // Call our own internal API route which proxies to GNews
         // Use full URL if on server, relative if on client? 
@@ -23,24 +61,18 @@ export async function fetchMarketNews(category?: string): Promise<NewsArticle[]>
             return getFallbackNews();
         }
 
-        const data = await res.json();
+        const data = await res.json() as NewsApiResponse;
 
         if (!data.articles || !Array.isArray(data.articles)) {
             console.warn('News API returned unexpected format, using fallback');
             return getFallbackNews();
         }
 
-        /* eslint-disable @typescript-eslint/no-explicit-any */
-        return data.articles.map((a: any) => ({
-            title: a.title,
-            description: a.description || 'No description available.',
-            url: a.url,
-            source: a.source?.name || 'Unknown',
-            publishedAt: a.publishedAt,
-            imageUrl: a.image || a.urlToImage,
-            category: category || 'general',
-        }));
-        /* eslint-enable @typescript-eslint/no-explicit-any */
+        const mapped = data.articles
+            .map((a) => toSafeArticle(a, validCategory || 'general'))
+            .filter((a): a is NewsArticle => a !== null);
+
+        return mapped.length > 0 ? mapped : getFallbackNews();
 
     } catch (err) {
         console.error('Failed to fetch news:', err);

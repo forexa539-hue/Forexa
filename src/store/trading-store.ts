@@ -4,7 +4,6 @@ import {
     INSTRUMENTS,
     PriceData,
     fetchPrice,
-    fetchOHLCV,
     fetchBatchPrices,
 } from '@/lib/market-api';
 import { getDbInstance } from '@/lib/firebase';
@@ -23,6 +22,49 @@ import {
 } from 'firebase/firestore';
 
 const getDb = () => getDbInstance();
+
+const clampPnlToIsolatedMargin = (pnl: number, margin: number) => {
+    // Isolated margin model: max loss cannot exceed committed margin.
+    return Math.max(pnl, -margin);
+};
+
+const ensureFinitePositive = (value: number, label: string) => {
+    if (!Number.isFinite(value) || value <= 0) {
+        throw new Error(`Invalid ${label}`);
+    }
+};
+
+const parseFirebaseError = (error: unknown, fallback: string) => {
+    const code = (error as { code?: string })?.code || '';
+
+    if (code.includes('permission-denied')) {
+        return 'Permission denied. Check Firestore rules and sign in again.';
+    }
+    if (code.includes('not-found')) {
+        return 'Account data not found. Please re-login and try again.';
+    }
+    if (code.includes('unavailable') || code.includes('deadline-exceeded')) {
+        return 'Network unavailable. Please retry in a moment.';
+    }
+
+    const message = (error as { message?: string })?.message;
+    return message && message.trim() ? message : fallback;
+};
+
+const ensureUserAccountDoc = async (uid: string) => {
+    const ref = doc(getDb(), 'users', uid);
+    const snap = await getDoc(ref);
+    if (!snap.exists()) {
+        await setDoc(ref, {
+            displayName: 'Trader',
+            balance: 100000,
+            resetCount: 0,
+            friends: [],
+            portfolioValue: 100000,
+            createdAt: serverTimestamp(),
+        }, { merge: true });
+    }
+};
 
 export interface Position {
     id?: string;
@@ -114,9 +156,12 @@ export const useTradingStore = create<TradingState>((set, get) => ({
     executeMarketOrder: async (uid, type, margin, leverage) => {
         const { selectedInstrument, prices, balance } = get();
         const priceData = prices[selectedInstrument.id];
-        if (!priceData) return;
+        if (!priceData) throw new Error('Live price unavailable. Please try again.');
 
-        if (margin > balance) return;
+        ensureFinitePositive(margin, 'margin');
+        ensureFinitePositive(leverage, 'leverage');
+        ensureFinitePositive(priceData.price, 'market price');
+        if (margin > balance) throw new Error('Insufficient balance');
 
         const currentPrice = priceData.price;
         const positionValue = margin * leverage;
@@ -159,24 +204,34 @@ export const useTradingStore = create<TradingState>((set, get) => ({
             openedAt: Date.now(),
         };
 
-        // Save to Firestore
-        const posRef = await addDoc(collection(getDb(), 'users', uid, 'positions'), position);
-        position.id = posRef.id;
+        try {
+            await ensureUserAccountDoc(uid);
 
-        // Update balance
-        const newBalance = balance - margin;
-        await updateDoc(doc(getDb(), 'users', uid), { balance: newBalance });
+            // Save to Firestore
+            const posRef = await addDoc(collection(getDb(), 'users', uid, 'positions'), position);
+            position.id = posRef.id;
 
-        set((state) => ({
-            positions: [...state.positions, position],
-            balance: newBalance,
-        }));
+            // Update balance
+            const newBalance = balance - margin;
+            await updateDoc(doc(getDb(), 'users', uid), { balance: newBalance });
+
+            set((state) => ({
+                positions: [...state.positions, position],
+                balance: newBalance,
+            }));
+        } catch (error) {
+            console.error('Failed to execute market order:', error);
+            throw new Error(parseFirebaseError(error, 'Could not place market order. Please try again.'));
+        }
     },
 
     executeLimitOrder: async (uid, type, margin, leverage, limitPrice) => {
         const { selectedInstrument, balance } = get();
 
-        if (margin > balance) return;
+        ensureFinitePositive(margin, 'margin');
+        ensureFinitePositive(leverage, 'leverage');
+        ensureFinitePositive(limitPrice, 'limit price');
+        if (margin > balance) throw new Error('Insufficient balance');
 
         const positionValue = margin * leverage;
         // precise quantity will be calculated on fill, executed at limit price
@@ -210,16 +265,23 @@ export const useTradingStore = create<TradingState>((set, get) => ({
             openedAt: Date.now(),
         };
 
-        const posRef = await addDoc(collection(getDb(), 'users', uid, 'positions'), position);
-        position.id = posRef.id;
+        try {
+            await ensureUserAccountDoc(uid);
 
-        const newBalance = balance - margin;
-        await updateDoc(doc(getDb(), 'users', uid), { balance: newBalance });
+            const posRef = await addDoc(collection(getDb(), 'users', uid, 'positions'), position);
+            position.id = posRef.id;
 
-        set((state) => ({
-            positions: [...state.positions, position],
-            balance: newBalance,
-        }));
+            const newBalance = balance - margin;
+            await updateDoc(doc(getDb(), 'users', uid), { balance: newBalance });
+
+            set((state) => ({
+                positions: [...state.positions, position],
+                balance: newBalance,
+            }));
+        } catch (error) {
+            console.error('Failed to place limit order:', error);
+            throw new Error(parseFirebaseError(error, 'Could not place limit order. Please try again.'));
+        }
     },
 
     checkLimitOrders: async (uid) => {
@@ -227,55 +289,59 @@ export const useTradingStore = create<TradingState>((set, get) => ({
         const pendingOrders = positions.filter((p) => p.status === 'pending');
 
         for (const pos of pendingOrders) {
-            const priceData = prices[pos.instrument];
-            if (!priceData || !pos.limitPrice) continue;
+            try {
+                const priceData = prices[pos.instrument];
+                if (!priceData || !pos.limitPrice) continue;
 
-            const currentPrice = priceData.price;
-            const shouldFill =
-                (pos.type === 'buy' && currentPrice <= pos.limitPrice) ||
-                (pos.type === 'sell' && currentPrice >= pos.limitPrice);
+                const currentPrice = priceData.price;
+                const shouldFill =
+                    (pos.type === 'buy' && currentPrice <= pos.limitPrice) ||
+                    (pos.type === 'sell' && currentPrice >= pos.limitPrice);
 
-            if (shouldFill) {
-                // Execute at Limit Price (guaranteed for limit orders usually, or better)
-                // For simplicity simulation, we fill at limit price exactly
-                const fillPrice = pos.limitPrice;
-                const quantity = pos.positionValue / fillPrice;
+                if (shouldFill) {
+                    // Execute at Limit Price (guaranteed for limit orders usually, or better)
+                    // For simplicity simulation, we fill at limit price exactly
+                    const fillPrice = pos.limitPrice;
+                    const quantity = pos.positionValue / fillPrice;
 
-                // Recalculate Liquidation
-                let liquidationPrice = 0;
-                const maintenanceMarginRatio = 0.8;
+                    // Recalculate Liquidation
+                    let liquidationPrice = 0;
+                    const maintenanceMarginRatio = 0.8;
 
-                if (pos.type === 'buy') {
-                    const maxLossPerUnit = (pos.size * maintenanceMarginRatio) / quantity;
-                    liquidationPrice = fillPrice - maxLossPerUnit;
-                } else {
-                    const maxLossPerUnit = (pos.size * maintenanceMarginRatio) / quantity;
-                    liquidationPrice = fillPrice + maxLossPerUnit;
-                }
-                if (liquidationPrice < 0) liquidationPrice = 0;
+                    if (pos.type === 'buy') {
+                        const maxLossPerUnit = (pos.size * maintenanceMarginRatio) / quantity;
+                        liquidationPrice = fillPrice - maxLossPerUnit;
+                    } else {
+                        const maxLossPerUnit = (pos.size * maintenanceMarginRatio) / quantity;
+                        liquidationPrice = fillPrice + maxLossPerUnit;
+                    }
+                    if (liquidationPrice < 0) liquidationPrice = 0;
 
-                const updatedPosition = {
-                    ...pos,
-                    status: 'open' as const,
-                    entryPrice: fillPrice,
-                    quantity,
-                    liquidationPrice
-                };
-
-                if (pos.id) {
-                    await updateDoc(doc(getDb(), 'users', uid, 'positions', pos.id), {
-                        status: 'open',
+                    const updatedPosition = {
+                        ...pos,
+                        status: 'open' as const,
                         entryPrice: fillPrice,
                         quantity,
                         liquidationPrice
-                    });
-                }
+                    };
 
-                set((state) => ({
-                    positions: state.positions.map((p) =>
-                        p.id === pos.id ? updatedPosition : p
-                    ),
-                }));
+                    if (pos.id) {
+                        await updateDoc(doc(getDb(), 'users', uid, 'positions', pos.id), {
+                            status: 'open',
+                            entryPrice: fillPrice,
+                            quantity,
+                            liquidationPrice
+                        });
+                    }
+
+                    set((state) => ({
+                        positions: state.positions.map((p) =>
+                            p.id === pos.id ? updatedPosition : p
+                        ),
+                    }));
+                }
+            } catch (error) {
+                console.error(`Failed to process pending order ${pos.id}:`, error);
             }
         }
     },
@@ -300,7 +366,11 @@ export const useTradingStore = create<TradingState>((set, get) => ({
             if (shouldLiquidate) {
                 console.log(`Liquidating position ${pos.id} for ${pos.instrumentName}`);
                 // Force close
-                await closePosition(uid, pos);
+                try {
+                    await closePosition(uid, pos);
+                } catch (error) {
+                    console.error(`Liquidation failed for position ${pos.id}:`, error);
+                }
                 // Note: closePosition currently returns margin+pnl. 
                 // If liquidated, PnL is approx -margin (loss of collateral).
                 // The implementation of closePosition needs to handle this naturally.
@@ -311,20 +381,26 @@ export const useTradingStore = create<TradingState>((set, get) => ({
 
     closePosition: async (uid, position) => {
         const { prices } = get();
+        if (position.status !== 'open') throw new Error('Only open positions can be closed');
         const priceData = prices[position.instrument];
-        if (!priceData) return;
+        if (!priceData) throw new Error('Live price unavailable. Please try again.');
+        ensureFinitePositive(position.entryPrice, 'entry price');
+        ensureFinitePositive(position.quantity, 'quantity');
 
         const exitPrice = priceData.price;
-        let pnl: number;
+        ensureFinitePositive(exitPrice, 'exit price');
+
+        let rawPnl: number;
 
         // PnL = (Exit - Entry) * Quantity * (1 if Buy else -1)
         // Quantity = (Margin * Leverage) / Entry
 
         if (position.type === 'buy') {
-            pnl = (exitPrice - position.entryPrice) * position.quantity;
+            rawPnl = (exitPrice - position.entryPrice) * position.quantity;
         } else {
-            pnl = (position.entryPrice - exitPrice) * position.quantity;
+            rawPnl = (position.entryPrice - exitPrice) * position.quantity;
         }
+        const pnl = clampPnlToIsolatedMargin(rawPnl, position.size);
 
         const trade: Trade = {
             instrument: position.instrument,
@@ -338,62 +414,69 @@ export const useTradingStore = create<TradingState>((set, get) => ({
             closedAt: Date.now(),
         };
 
-        // Save trade to Firestore
-        const tradeRef = await addDoc(collection(getDb(), 'users', uid, 'trades'), trade);
-        trade.id = tradeRef.id;
+        try {
+            // Save trade to Firestore
+            const tradeRef = await addDoc(collection(getDb(), 'users', uid, 'trades'), trade);
+            trade.id = tradeRef.id;
 
-        // Remove position from Firestore
-        if (position.id) {
-            await deleteDoc(doc(getDb(), 'users', uid, 'positions', position.id));
-        }
-
-        // Update balance
-        // New Balance = Old Balance + Returned Margin + PnL
-        // (Margin was deducted on entry)
-        const currentBalance = get().balance;
-        const newBalance = currentBalance + position.size + pnl;
-
-        await updateDoc(doc(getDb(), 'users', uid), {
-            balance: newBalance,
-            portfolioValue: newBalance, // Simplified, should strictly be Balance + Unrealized PnL of other pos
-        });
-
-        // Update leaderboard
-        const userDoc = await getDoc(doc(getDb(), 'users', uid));
-        const userData = userDoc.data();
-        if (userData) {
-            const percentReturn = ((newBalance - 100000) / 100000) * 100;
-            // re-update portfolio value just in case
-            await updateDoc(doc(getDb(), 'users', uid), { portfolioValue: newBalance });
-            try {
-                const leaderRef = doc(getDb(), 'leaderboard', uid);
-                const leaderSnap = await getDoc(leaderRef);
-                const leaderData = {
-                    displayName: userData.displayName || 'Trader',
-                    portfolioValue: newBalance,
-                    percentReturn,
-                    lastUpdated: serverTimestamp(),
-                };
-                if (leaderSnap.exists()) {
-                    await updateDoc(leaderRef, leaderData);
-                } else {
-                    await setDoc(leaderRef, leaderData);
-                }
-            } catch (err) {
-                console.error('Leaderboard update failed:', err);
+            // Remove position from Firestore
+            if (position.id) {
+                await deleteDoc(doc(getDb(), 'users', uid, 'positions', position.id));
             }
-        }
 
-        set((state) => ({
-            positions: state.positions.filter((p) => p.id !== position.id),
-            trades: [...state.trades, trade],
-            balance: newBalance,
-        }));
+            // Update balance
+            // New Balance = Old Balance + Returned Margin + PnL
+            // (Margin was deducted on entry)
+            const currentBalance = get().balance;
+            const newBalance = currentBalance + position.size + pnl;
+
+            await updateDoc(doc(getDb(), 'users', uid), {
+                balance: newBalance,
+                portfolioValue: newBalance, // Simplified, should strictly be Balance + Unrealized PnL of other pos
+            });
+
+            // Update leaderboard
+            const userDoc = await getDoc(doc(getDb(), 'users', uid));
+            const userData = userDoc.data();
+            if (userData) {
+                const percentReturn = ((newBalance - 100000) / 100000) * 100;
+                // re-update portfolio value just in case
+                await updateDoc(doc(getDb(), 'users', uid), { portfolioValue: newBalance });
+                try {
+                    const leaderRef = doc(getDb(), 'leaderboard', uid);
+                    const leaderSnap = await getDoc(leaderRef);
+                    const leaderData = {
+                        displayName: userData.displayName || 'Trader',
+                        portfolioValue: newBalance,
+                        percentReturn,
+                        lastUpdated: serverTimestamp(),
+                    };
+                    if (leaderSnap.exists()) {
+                        await updateDoc(leaderRef, leaderData);
+                    } else {
+                        await setDoc(leaderRef, leaderData);
+                    }
+                } catch (err) {
+                    console.error('Leaderboard update failed:', err);
+                }
+            }
+
+            set((state) => ({
+                positions: state.positions.filter((p) => p.id !== position.id),
+                trades: [...state.trades, trade],
+                balance: newBalance,
+            }));
+        } catch (error) {
+            console.error('Failed to close position:', error);
+            throw new Error(parseFirebaseError(error, 'Could not close position. Please try again.'));
+        }
     },
 
     loadUserData: async (uid) => {
         set({ loading: true });
         try {
+            await ensureUserAccountDoc(uid);
+
             // Load user balance
             const userDoc = await getDoc(doc(getDb(), 'users', uid));
             const userData = userDoc.data();
@@ -429,33 +512,40 @@ export const useTradingStore = create<TradingState>((set, get) => ({
     resetAccount: async (uid) => {
         const { positions } = get();
 
-        // Delete all positions
-        for (const pos of positions) {
-            if (pos.id) {
-                await deleteDoc(doc(getDb(), 'users', uid, 'positions', pos.id));
+        try {
+            await ensureUserAccountDoc(uid);
+
+            // Delete all positions
+            for (const pos of positions) {
+                if (pos.id) {
+                    await deleteDoc(doc(getDb(), 'users', uid, 'positions', pos.id));
+                }
             }
+
+            // Delete all trades
+            const tradeSnap = await getDocs(collection(getDb(), 'users', uid, 'trades'));
+            for (const d of tradeSnap.docs) {
+                await deleteDoc(d.ref);
+            }
+
+            // Reset user data
+            const userDoc = await getDoc(doc(getDb(), 'users', uid));
+            const resetCount = (userDoc.data()?.resetCount || 0) + 1;
+
+            await updateDoc(doc(getDb(), 'users', uid), {
+                balance: 100000,
+                portfolioValue: 100000,
+                resetCount,
+            });
+
+            set({
+                positions: [],
+                trades: [],
+                balance: 100000,
+            });
+        } catch (error) {
+            console.error('Failed to reset account:', error);
+            throw new Error(parseFirebaseError(error, 'Could not reset account. Please try again.'));
         }
-
-        // Delete all trades
-        const tradeSnap = await getDocs(collection(getDb(), 'users', uid, 'trades'));
-        for (const d of tradeSnap.docs) {
-            await deleteDoc(d.ref);
-        }
-
-        // Reset user data
-        const userDoc = await getDoc(doc(getDb(), 'users', uid));
-        const resetCount = (userDoc.data()?.resetCount || 0) + 1;
-
-        await updateDoc(doc(getDb(), 'users', uid), {
-            balance: 100000,
-            portfolioValue: 100000,
-            resetCount,
-        });
-
-        set({
-            positions: [],
-            trades: [],
-            balance: 100000,
-        });
     },
 }));

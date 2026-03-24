@@ -2,6 +2,38 @@
 import { useEffect, useRef } from 'react';
 import { usePathname } from 'next/navigation';
 
+class Particle {
+    x: number;
+    y: number;
+    vx: number;
+    vy: number;
+    size: number;
+
+    constructor(w: number, h: number) {
+        this.x = Math.random() * w;
+        this.y = Math.random() * h;
+        this.vx = (Math.random() - 0.5) * 0.8; // Slow floating velocity
+        this.vy = (Math.random() - 0.5) * 0.8;
+        this.size = Math.random() * 2 + 1;
+    }
+
+    update(w: number, h: number) {
+        this.x += this.vx;
+        this.y += this.vy;
+
+        // Bounce off edges
+        if (this.x < 0 || this.x > w) this.vx *= -1;
+        if (this.y < 0 || this.y > h) this.vy *= -1;
+    }
+
+    draw(ctx: CanvasRenderingContext2D) {
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(16, 185, 129, 0.4)'; // Theme green
+        ctx.fill();
+    }
+}
+
 export default function MouseGlow() {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const pathname = usePathname();
@@ -16,39 +48,6 @@ export default function MouseGlow() {
         let height = 0;
         let particles: Particle[] = [];
         const mouse = { x: -1000, y: -1000 };
-
-        class Particle {
-            x: number;
-            y: number;
-            vx: number;
-            vy: number;
-            size: number;
-
-            constructor(w: number, h: number) {
-                this.x = Math.random() * w;
-                this.y = Math.random() * h;
-                this.vx = (Math.random() - 0.5) * 0.8; // Slow floating velocity
-                this.vy = (Math.random() - 0.5) * 0.8;
-                this.size = Math.random() * 2 + 1;
-            }
-
-            update(w: number, h: number) {
-                this.x += this.vx;
-                this.y += this.vy;
-
-                // Bounce off edges
-                if (this.x < 0 || this.x > w) this.vx *= -1;
-                if (this.y < 0 || this.y > h) this.vy *= -1;
-            }
-
-            draw() {
-                if (!ctx) return;
-                ctx.beginPath();
-                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
-                ctx.fillStyle = 'rgba(16, 185, 129, 0.4)'; // Theme green
-                ctx.fill();
-            }
-        }
 
         const initParticles = (w: number, h: number) => {
             particles = [];
@@ -98,7 +97,7 @@ export default function MouseGlow() {
             // Update & Draw Particles
             particles.forEach(p => {
                 p.update(width, height);
-                p.draw();
+                p.draw(ctx);
             });
 
             // Draw Connections

@@ -20,10 +20,10 @@ export default function LeaderboardPage() {
     const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
     const [period, setPeriod] = useState<Period>('global');
     const [loading, setLoading] = useState(true);
+    const [errorMessage, setErrorMessage] = useState('');
 
     useEffect(() => {
         let active = true;
-        setLoading(true);
 
         const fetchLeaderboard = async () => {
             try {
@@ -47,17 +47,28 @@ export default function LeaderboardPage() {
                     } else {
                         setEntries(data);
                     }
+                    setErrorMessage('');
                     setLoading(false);
                 }
             } catch (err) {
                 console.error('Failed to fetch leaderboard:', err);
-                if (active) setLoading(false);
+                if (active) {
+                    setErrorMessage('Could not load leaderboard right now. Please try again.');
+                    setLoading(false);
+                }
             }
         };
 
-        fetchLeaderboard();
+        void fetchLeaderboard();
         return () => { active = false; };
     }, [period, user]);
+
+    const handlePeriodChange = (next: Period) => {
+        if (next === period) return;
+        setLoading(true);
+        setErrorMessage('');
+        setPeriod(next);
+    };
 
     const PERIODS: { key: Period; label: string }[] = [
         { key: 'today', label: 'Today' },
@@ -79,13 +90,15 @@ export default function LeaderboardPage() {
                         <button
                             key={p.key}
                             className={`tab ${period === p.key ? 'active' : ''}`}
-                            onClick={() => setPeriod(p.key)}
+                            onClick={() => handlePeriodChange(p.key)}
                         >
                             {p.label}
                         </button>
                     ))}
                 </div>
             </div>
+
+            {errorMessage && <div className={styles.loading}>{errorMessage}</div>}
 
             {loading ? (
                 <div className={styles.loading}>Loading leaderboard...</div>

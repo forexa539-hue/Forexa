@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { useAuth } from '@/context/auth-context';
 import { useTradingStore, Position } from '@/store/trading-store';
 import styles from './PositionsTable.module.css';
@@ -7,6 +8,8 @@ import styles from './PositionsTable.module.css';
 export default function PositionsTable() {
     const { user } = useAuth();
     const { positions, prices, closePosition } = useTradingStore();
+    const [closingId, setClosingId] = useState<string | null>(null);
+    const [errorMessage, setErrorMessage] = useState('');
 
     const openPositions = positions.filter((p) => p.status === 'open');
     const pendingPositions = positions.filter((p) => p.status === 'pending');
@@ -14,8 +17,21 @@ export default function PositionsTable() {
 
 
     const handleClose = async (pos: Position) => {
-        if (!user) return;
-        await closePosition(user.uid, pos);
+        if (!user) {
+            setErrorMessage('Please login to close positions');
+            return;
+        }
+
+        try {
+            setClosingId(pos.id || null);
+            setErrorMessage('');
+            await closePosition(user.uid, pos);
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Failed to close position';
+            setErrorMessage(message);
+        } finally {
+            setClosingId(null);
+        }
     };
 
     if (openPositions.length === 0 && pendingPositions.length === 0) {
@@ -29,6 +45,11 @@ export default function PositionsTable() {
 
     return (
         <div className={styles.wrapper}>
+            {errorMessage && (
+                <div className={styles.empty}>
+                    <p>{errorMessage}</p>
+                </div>
+            )}
             {openPositions.length > 0 && (
                 <>
                     <h4 className={styles.sectionTitle}>Open Positions</h4>
@@ -83,8 +104,12 @@ export default function PositionsTable() {
                                                 <div style={{ fontSize: '11px' }}>({isProfit ? '+' : ''}{roe.toFixed(2)}%)</div>
                                             </td>
                                             <td>
-                                                <button className="btn btn-ghost btn-sm" onClick={() => handleClose(pos)}>
-                                                    Close
+                                                <button
+                                                    className="btn btn-ghost btn-sm"
+                                                    onClick={() => handleClose(pos)}
+                                                    disabled={closingId === pos.id}
+                                                >
+                                                    {closingId === pos.id ? 'Closing...' : 'Close'}
                                                 </button>
                                             </td>
                                         </tr>
