@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import styles from './page.module.css';
-import { INSTRUMENTS } from '@/lib/market-api';
+import { INSTRUMENTS_toshow } from '@/lib/market-api';
 import ContactForm from '@/components/ContactForm';
 import MouseGlow from '@/components/MouseGlow';
 
@@ -55,11 +55,9 @@ export default function HomePage() {
         <h2 className={styles.instrumentsTitle}>Trade Real Markets</h2>
         <p className={styles.instrumentsSub}>Access live pricing across forex, crypto, and major indices</p>
         <div className={styles.instrumentGrid}>
-          {INSTRUMENTS.map((inst) => (
+          {INSTRUMENTS_toshow.map((inst) => (
             <div key={inst.id} className={styles.instrumentCard}>
-              <p className={styles.instrumentLabel}>{inst.category}</p>
               <p className={styles.instrumentName}>{inst.name}</p>
-              <p className={styles.instrumentSymbol}>{inst.symbol}</p>
             </div>
           ))}
         </div>

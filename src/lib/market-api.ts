@@ -34,6 +34,13 @@ export const INSTRUMENTS: Instrument[] = [
     { id: 'audcad', name: 'AUD/CAD', symbol: 'AUD/CAD', category: 'forex', apiSource: 'twelvedata', apiSymbol: 'AUD/CAD' },
 ];
 
+export const INSTRUMENTS_toshow: Instrument[] = [
+    // Indices (using ETFs as proxies for free API access)
+    { id: 'indices', name: 'INDICES', symbol: 'SPY', category: 'indices', apiSource: 'twelvedata', apiSymbol: 'SPY' },
+    { id: 'nasdaq', name: 'FOREX', symbol: 'QQQ', category: 'indices', apiSource: 'twelvedata', apiSymbol: 'QQQ' },
+    { id: 'dowjones', name: 'CRYPTO', symbol: 'DIA', category: 'indices', apiSource: 'twelvedata', apiSymbol: 'DIA' },
+];
+
 export interface PriceData {
     price: number;
     change24h: number;
