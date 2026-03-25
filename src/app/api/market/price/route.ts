@@ -45,6 +45,51 @@ function parseSymbols(symbolParam: string) {
         .filter(Boolean);
 }
 
+function toStooqSymbol(symbol: string): string {
+    if (symbol === 'NIFTY50:NSE') return 'nifty';
+    if (symbol.includes('/')) return symbol.replace('/', '').toLowerCase();
+    return `${symbol.toLowerCase()}.us`;
+}
+
+async function fetchStooqPrice(symbol: string): Promise<PricePayload | null> {
+    const stooqSymbol = toStooqSymbol(symbol);
+    const res = await fetch(
+        `https://stooq.pl/q/l/?s=${encodeURIComponent(stooqSymbol)}&i=1`,
+        { headers: { Accept: 'text/plain' } }
+    );
+
+    if (!res.ok) return null;
+    const text = (await res.text()).trim();
+    if (!text || text.includes('B/D')) {
+        return null;
+    }
+
+    // CSV format: SYMBOL,DATE,TIME,OPEN,HIGH,LOW,CLOSE,VOLUME,
+    const firstRow = text.split('\n')[0];
+    const parts = firstRow.split(',');
+    if (parts.length < 7) return null;
+
+    const open = parseFloat(parts[3] || '');
+    const high = parseFloat(parts[4] || '');
+    const low = parseFloat(parts[5] || '');
+    const close = parseFloat(parts[6] || '');
+    if (!Number.isFinite(close)) return null;
+
+    const change24h = Number.isFinite(open) ? close - open : 0;
+    const changePercent = Number.isFinite(open) && open !== 0
+        ? (change24h / open) * 100
+        : 0;
+
+    return {
+        price: close,
+        change24h,
+        changePercent24h: changePercent,
+        high24h: Number.isFinite(high) ? high : close,
+        low24h: Number.isFinite(low) ? low : close,
+        timestamp: Date.now(),
+    };
+}
+
 export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const source = parseSource(searchParams.get('source'));
@@ -101,29 +146,39 @@ export async function GET(request: Request) {
 
         } else if (source === 'twelvedata') {
             const fetchSingle = async (symbol: string) => {
-                const res = await fetch(
-                    `https://api.twelvedata.com/price?symbol=${encodeURIComponent(symbol)}&apikey=${TWELVE_DATA_KEY}`
-                );
-                if (!res.ok) throw new Error(`TwelveData status: ${res.status}`);
-                const data = await res.json() as { price?: string; message?: string };
+                try {
+                    const res = await fetch(
+                        `https://api.twelvedata.com/price?symbol=${encodeURIComponent(symbol)}&apikey=${TWELVE_DATA_KEY}`
+                    );
+                    if (!res.ok) throw new Error(`TwelveData status: ${res.status}`);
+                    const data = await res.json() as { price?: string; message?: string };
 
-                if (typeof data.message === 'string' && data.message.trim()) {
-                    throw new Error(`${symbol}: ${data.message}`);
+                    if (typeof data.message === 'string' && data.message.trim()) {
+                        throw new Error(`${symbol}: ${data.message}`);
+                    }
+
+                    const price = parseFloat(data.price || '');
+                    if (!Number.isFinite(price)) {
+                        throw new Error(`${symbol}: invalid price payload`);
+                    }
+
+                    results[symbol] = {
+                        price,
+                        change24h: 0,
+                        changePercent24h: 0,
+                        high24h: price,
+                        low24h: price,
+                        timestamp: Date.now(),
+                    };
+                } catch (error) {
+                    const fallback = await fetchStooqPrice(symbol);
+                    if (fallback) {
+                        results[symbol] = fallback;
+                        return;
+                    }
+                    const message = error instanceof Error ? error.message : 'price fetch failed';
+                    throw new Error(`${symbol}: ${message}`);
                 }
-
-                const price = parseFloat(data.price || '');
-                if (!Number.isFinite(price)) {
-                    throw new Error(`${symbol}: invalid price payload`);
-                }
-
-                results[symbol] = {
-                    price,
-                    change24h: 0,
-                    changePercent24h: 0,
-                    high24h: price,
-                    low24h: price,
-                    timestamp: Date.now(),
-                };
             };
 
             if (symbols.length === 1) {
