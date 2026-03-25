@@ -477,21 +477,21 @@ export const useTradingStore = create<TradingState>((set, get) => ({
         try {
             await ensureUserAccountDoc(uid);
 
-            // Load user balance
-            const userDoc = await getDoc(doc(getDb(), 'users', uid));
+            // Load user balance + positions + trades in parallel
+            const [userDoc, posSnap, tradeSnap] = await Promise.all([
+                getDoc(doc(getDb(), 'users', uid)),
+                getDocs(
+                    query(collection(getDb(), 'users', uid, 'positions'), where('status', 'in', ['open', 'pending']))
+                ),
+                getDocs(collection(getDb(), 'users', uid, 'trades')),
+            ]);
             const userData = userDoc.data();
 
-            // Load positions
-            const posSnap = await getDocs(
-                query(collection(getDb(), 'users', uid, 'positions'), where('status', 'in', ['open', 'pending']))
-            );
             const positions: Position[] = posSnap.docs.map((d) => ({
                 id: d.id,
                 ...d.data(),
             })) as Position[];
 
-            // Load trades
-            const tradeSnap = await getDocs(collection(getDb(), 'users', uid, 'trades'));
             const trades: Trade[] = tradeSnap.docs.map((d) => ({
                 id: d.id,
                 ...d.data(),
@@ -506,6 +506,7 @@ export const useTradingStore = create<TradingState>((set, get) => ({
         } catch (err) {
             console.error('Failed to load user data:', err);
             set({ loading: false });
+            throw new Error(parseFirebaseError(err, 'Could not load account data.'));
         }
     },
 

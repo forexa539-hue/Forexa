@@ -32,7 +32,10 @@ export default function TradePage() {
     // Load user data on mount
     useEffect(() => {
         if (user) {
-            loadUserData(user.uid);
+            void loadUserData(user.uid).catch((error) => {
+                console.error('Trade page user data load failed:', error);
+                setPageMessage(error instanceof Error ? error.message : 'Could not load account data.');
+            });
         }
     }, [user, loadUserData]);
 

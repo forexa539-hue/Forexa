@@ -22,6 +22,23 @@ export default function ProfilePage() {
     const [dataLoading, setDataLoading] = useState(false);
     const [errorMessage, setErrorMessage] = useState('');
 
+    const parseProfileLoadError = (error: unknown) => {
+        const code = (error as { code?: string })?.code || '';
+
+        if (code.includes('permission-denied')) {
+            return 'Permission denied loading profile. Check Firestore rules and login state.';
+        }
+        if (code.includes('unauthenticated')) {
+            return 'Session expired. Please sign in again.';
+        }
+        if (code.includes('unavailable') || code.includes('deadline-exceeded')) {
+            return 'Network issue while loading profile. Please retry.';
+        }
+
+        const message = (error as { message?: string })?.message;
+        return message && message.trim() ? message : 'Could not load profile data. Please refresh.';
+    };
+
     useEffect(() => {
         if (!user) return;
 
@@ -29,8 +46,10 @@ export default function ProfilePage() {
             setDataLoading(true);
             setErrorMessage('');
             try {
-                await loadUserData(user.uid);
-                const userDoc = await getDoc(doc(getDbInstance(), 'users', user.uid));
+                const [_, userDoc] = await Promise.all([
+                    loadUserData(user.uid),
+                    getDoc(doc(getDbInstance(), 'users', user.uid)),
+                ]);
                 const data = userDoc.data();
                 if (data) {
                     setUserData({
@@ -40,7 +59,7 @@ export default function ProfilePage() {
                 }
             } catch (error) {
                 console.error('Profile data load failed:', error);
-                setErrorMessage('Could not load profile data. Please refresh.');
+                setErrorMessage(parseProfileLoadError(error));
             } finally {
                 setDataLoading(false);
             }
